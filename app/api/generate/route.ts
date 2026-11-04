@@ -31,9 +31,9 @@ function enforceRateLimit(request: NextRequest): boolean {
 
   current.count += 1;
   if (rateWindows.size > 10_000) {
-    for (const [key, value] of rateWindows) {
+    rateWindows.forEach((value, key) => {
       if (now - value.startedAt >= RATE_WINDOW_MS) rateWindows.delete(key);
-    }
+    });
   }
   return true;
 }
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         negative_prompt: negative || undefined,
         ...dimensions
       }
-    });
+    }, { outputType: "blob" });
 
     const contentType = image.type || "image/png";
     if (!contentType.startsWith("image/")) {
