@@ -4,7 +4,46 @@ import { useEffect, useMemo, useState } from "react";
 
 type Art = { id: string; src: string; prompt: string; style: string; createdAt: number };
 
-const STORAGE_KEY = "dhrisya-gallery-v1";
+const DB_NAME = "dhrisya-gallery";
+const STORE_NAME = "images";
+
+function openGalleryDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+        request.result.createObjectStore(STORE_NAME, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open image gallery."));
+  });
+}
+
+async function readGallery(): Promise<Art[]> {
+  const db = await openGalleryDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readonly");
+    const request = transaction.objectStore(STORE_NAME).getAll();
+    request.onsuccess = () => resolve((request.result as Art[]).sort((a, b) => b.createdAt - a.createdAt));
+    request.onerror = () => reject(request.error || new Error("Could not read saved images."));
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => { db.close(); reject(transaction.error); };
+  });
+}
+
+async function writeGallery(items: Art[]): Promise<void> {
+  const db = await openGalleryDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    store.clear();
+    for (const item of items.slice(0, 40)) store.put(item);
+    transaction.oncomplete = () => { db.close(); resolve(); };
+    transaction.onerror = () => { db.close(); reject(transaction.error || new Error("Could not save gallery.")); };
+    transaction.onabort = () => { db.close(); reject(transaction.error || new Error("Gallery save was cancelled.")); };
+  });
+}
 
 export default function Home() {
   const [prompt, setPrompt] = useState("");
@@ -15,19 +54,33 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [gallery, setGallery] = useState<Art[]>([]);
+  const [galleryReady, setGalleryReady] = useState(false);
   const [activeTab, setActiveTab] = useState<"create" | "gallery">("create");
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) setGallery(JSON.parse(saved));
-    } catch { /* Ignore invalid local gallery data. */ }
+    let cancelled = false;
+    readGallery()
+      .then(items => {
+        if (!cancelled) {
+          setGallery(items.slice(0, 40));
+          setGalleryReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatus("Could not open the local gallery in this browser.");
+          setGalleryReady(true);
+        }
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(gallery.slice(0, 40))); }
-    catch { setStatus("Browser storage is full. Download your images before continuing."); }
-  }, [gallery]);
+    if (!galleryReady) return;
+    writeGallery(gallery).catch(() => {
+      setStatus("The browser could not save all gallery images. Download any images you want to keep.");
+    });
+  }, [gallery, galleryReady]);
 
   const ready = useMemo(() => prompt.trim().length > 2 && !busy, [prompt, busy]);
 
