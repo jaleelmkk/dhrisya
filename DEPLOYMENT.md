@@ -4,7 +4,7 @@
 
 Dhrisya is configured as a Next.js application for Vercel. Import `jaleelmkk/dhrisya` from GitHub and leave the framework preset as Next.js. The project uses Node.js 20.9 or later.
 
-Add these server-side environment variables before deploying:
+Before the first generation, sign in to Hugging Face and accept the FLUX.1-schnell model access conditions on the model page. Create a token with Inference Providers permission. Then add these server-side environment variables before deploying:
 
 - `HF_TOKEN`: a Hugging Face user token with Inference Providers permission.
 - `HF_MODEL` (optional): defaults to `black-forest-labs/FLUX.1-schnell`.
