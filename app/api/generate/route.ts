@@ -11,18 +11,49 @@ type RequestBody = {
   aspectRatio?: "1:1" | "16:9" | "9:16";
 };
 
-function buildPrompt(prompt: string, negativePrompt: string, style: string, ratio: string) {
+type RateWindow = { startedAt: number; count: number };
+const rateWindows = new Map<string, RateWindow>();
+const RATE_LIMIT = 8;
+const RATE_WINDOW_MS = 60_000;
+
+function enforceRateLimit(request: NextRequest): boolean {
+  const ip = request.headers.get("x-real-ip")
+    || request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+    || "unknown";
+  const now = Date.now();
+  const current = rateWindows.get(ip);
+
+  if (!current || now - current.startedAt >= RATE_WINDOW_MS) {
+    rateWindows.set(ip, { startedAt: now, count: 1 });
+    return true;
+  }
+  if (current.count >= RATE_LIMIT) return false;
+
+  current.count += 1;
+  if (rateWindows.size > 10_000) {
+    for (const [key, value] of rateWindows) {
+      if (now - value.startedAt >= RATE_WINDOW_MS) rateWindows.delete(key);
+    }
+  }
+  return true;
+}
+
+function buildPrompt(prompt: string, style: string, ratio: string) {
   const styleText = style === "Anime"
     ? "anime illustration, polished anime artwork, expressive composition"
     : "photorealistic, natural detail, professional photography, realistic lighting";
   const ratioText = ratio === "16:9" ? "wide landscape composition" : ratio === "9:16" ? "vertical portrait composition" : "square composition";
-  const exclusions = negativePrompt.trim()
-    ? ` Avoid these elements: ${negativePrompt.trim()}.`
-    : "";
-  return `${prompt.trim()}. ${styleText}, ${ratioText}.${exclusions}`;
+  return `${prompt.trim()}. ${styleText}, ${ratioText}.`;
 }
 
 export async function POST(request: NextRequest) {
+  if (!enforceRateLimit(request)) {
+    return NextResponse.json(
+      { error: "Too many generation requests from this connection. Please wait a minute and try again." },
+      { status: 429 }
+    );
+  }
+
   const token = process.env.HF_TOKEN;
   const model = process.env.HF_MODEL || "black-forest-labs/FLUX.1-schnell";
 
@@ -46,13 +77,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Enter a more detailed prompt." }, { status: 400 });
   }
 
+  const dimensions = ratio === "16:9"
+    ? { width: 1024, height: 576 }
+    : ratio === "9:16"
+    ? { width: 576, height: 1024 }
+    : { width: 1024, height: 1024 };
+
   try {
     const client = new InferenceClient(token);
     const image = await client.textToImage({
       provider: "auto",
       model,
-      inputs: buildPrompt(prompt, negative, style, ratio),
-      parameters: { num_inference_steps: 5 }
+      inputs: buildPrompt(prompt, style, ratio),
+      parameters: {
+        num_inference_steps: 4,
+        negative_prompt: negative || undefined,
+        ...dimensions
+      }
     });
 
     const contentType = image.type || "image/png";
